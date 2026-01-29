@@ -1,0 +1,106 @@
+# Caddy 服务器配置文件 - Nextcloud 部署
+# 简化版配置，适配 Caddy 2.10.0
+
+:80 {
+    # 根目录设置
+    root * /var/www/html
+    
+    # 请求体大小限制
+    request_body {
+        max_size 10GB
+    }
+    
+    # HTTP 头安全配置
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        X-XSS-Protection "1; mode=block"
+        # Strict-Transport-Security "max-age=31536000; includeSubDomains" # 禁用 HSTS，因为使用 HTTP
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        -Server # 隐藏服务器版本信息
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; frame-src 'self' collabora:; object-src 'none';"
+    }
+    
+    # 响应压缩
+    encode gzip zstd
+    
+    # WebDAV 重定向
+    redir /.well-known/carddav /remote.php/dav/ 301
+    redir /.well-known/caldav /remote.php/dav/ 301
+    redir /.well-known/webfinger /index.php/.well-known/webfinger 301
+    redir /.well-known/nodeinfo /index.php/.well-known/nodeinfo 301
+    
+    # 禁止访问的路径
+    @forbidden path /.htaccess /data/* /config/* /3rdparty/* /lib/* /templates/* /occ /console.php /updater/* /.user.ini
+    respond @forbidden 403
+    
+    # OCS API 处理
+    handle /ocs/v*.php* {
+        php_fastcgi nextcloud:9000 {
+            dial_timeout 30s
+            read_timeout 3600s
+            write_timeout 3600s
+        }
+    }
+    
+    # 状态和定时任务处理
+    handle /status.php {
+        php_fastcgi nextcloud:9000 {
+            dial_timeout 10s
+            read_timeout 60s
+        }
+    }
+    
+    handle /cron.php {
+        php_fastcgi nextcloud:9000 {
+            dial_timeout 30s
+            read_timeout 3600s
+            write_timeout 3600s
+        }
+    }
+
+    # WebSocket 支持
+    @websocket {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    handle @websocket {
+        reverse_proxy nextcloud:9000 {
+            transport http {
+                keepalive 3600s
+                read_timeout 3600s
+                write_timeout 3600s
+            }
+        }
+    }
+    
+    # 静态文件处理
+    @static {
+        file
+        path *.css *.js *.mjs *.ico *.png *.jpg *.jpeg *.gif *.svg *.woff2 *.woff *.map
+    }
+    handle @static {
+        header Cache-Control "public, max-age=31536000"
+        file_server
+    }
+    
+    # PHP 处理
+    php_fastcgi nextcloud:9000 {
+        index index.php
+        dial_timeout 30s
+        read_timeout 3600s
+        write_timeout 3600s
+    }
+    
+    # 日志配置
+    log {
+        level INFO
+        format json
+        output file /var/log/caddy/access.log {
+          roll_size 10mb
+          roll_keep 5
+          roll_keep_for 720h
+        }
+    }
+}

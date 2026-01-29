@@ -1,0 +1,224 @@
+# Docker Compose 配置文件 - Nextcloud 部署
+# 使用本地目录挂载替代 Docker 卷，提升数据管理掌控性
+
+volumes:
+  # 本地目录挂载配置
+  nextcloud_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../data/nextcloud
+  mariadb_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../data/mariadb
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../data/redis
+  caddy_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../data/caddy
+  caddy_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../data/caddy/config
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/16
+
+# 服务配置
+services:
+  # 数据库服务
+  mariadb:
+    image: mariadb:11.4
+    container_name: nextcloud-db
+    restart: always
+    volumes: [mariadb_data:/var/lib/mysql]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    # 数据库调优参数
+    command: >
+      --transaction-isolation=READ-COMMITTED 
+      --binlog-format=ROW 
+      --innodb_buffer_pool_size=512M 
+      --innodb_log_file_size=128M 
+      --innodb_io_capacity=200 
+      --innodb_io_capacity_max=400 
+      --max_connections=200 
+      --query_cache_size=0 
+      --query_cache_type=0
+    networks: [default]
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    # 资源伸缩配置
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Redis 缓存服务
+  redis:
+    image: redis:alpine
+    container_name: nextcloud-redis
+    restart: always
+    volumes: [redis_data:/data]
+    # Redis 缓存优化
+    command: >
+      redis-server 
+      --requirepass ${REDIS_PASSWORD} 
+      --maxmemory 512mb 
+      --maxmemory-policy allkeys-lru 
+      --tcp-keepalive 60
+    networks: [default]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-u", "redis://default:${REDIS_PASSWORD}@localhost:6379", "PING"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    # 资源伸缩配置
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # Nextcloud 应用服务
+  nextcloud:
+    image: nextcloud:production-fpm-alpine
+    container_name: nextcloud-app
+    restart: always
+    volumes:
+      - nextcloud_data:/var/www/html
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 512M
+    environment:
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_HOST: mariadb
+      NEXTCLOUD_ADMIN_USER: ${ADMIN_USER}
+      NEXTCLOUD_ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_HOST_PASSWORD: ${REDIS_PASSWORD}
+      NEXTCLOUD_TRUSTED_DOMAINS: ${TRUSTED_DOMAINS}
+      NEXTCLOUD_TRUSTED_PROXIES: ${TRUSTED_PROXIES}
+      # OVERWRITEHOST: nextcloud.your-domain.com
+      # OVERWRITEPROTOCOL: https
+      # OVERWRITECLIURL: https://nextcloud.your-domain.com
+      PHP_MEMORY_LIMIT: ${PHP_MEMORY_LIMIT}
+      PHP_UPLOAD_LIMIT: ${PHP_UPLOAD_LIMIT}
+      PHP_MAX_EXECUTION_TIME: ${PHP_MAX_EXECUTION_TIME}
+      PHP_MAX_INPUT_VARS: ${PHP_MAX_INPUT_VARS}
+      PHP_POST_MAX_SIZE: ${PHP_POST_MAX_SIZE}
+      PHP_UPLOAD_MAX_FILESIZE: ${PHP_UPLOAD_MAX_FILESIZE}
+      PHP_FPM_MAX_CHILDREN: ${PHP_FPM_MAX_CHILDREN}
+      PHP_FPM_START_SERVERS: ${PHP_FPM_START_SERVERS}
+      PHP_FPM_MIN_SPARE_SERVERS: ${PHP_FPM_MIN_SPARE_SERVERS}
+      PHP_FPM_MAX_SPARE_SERVERS: ${PHP_FPM_MAX_SPARE_SERVERS}
+      TZ: ${TZ}
+    networks: [default]
+    healthcheck:
+      test: ["CMD-SHELL", "php /var/www/html/occ status | grep -q 'installed: true' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    # 资源伸缩配置
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    depends_on:
+      mariadb: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  # Caddy 反向代理服务
+  caddy:
+    image: caddy:2.10.0-alpine
+    container_name: nextcloud-proxy
+    restart: always
+    ports: ["${HTTP_PORT}:80"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - nextcloud_data:/var/www/html:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [default]
+    environment:
+      - SERVER_IP=${SERVER_IP}
+      - HTTP_PORT=${HTTP_PORT}
+      - CADDY_ADMIN=0.0.0.0:2019
+    command: sh -c "caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:2019/config || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # 资源伸缩配置
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      nextcloud: {condition: service_healthy}
