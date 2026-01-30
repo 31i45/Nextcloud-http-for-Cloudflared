@@ -151,24 +151,24 @@ maintain_nextcloud() {
   
   # 清理 Nextcloud 缓存
   echo "1. 清理 Nextcloud 缓存..."
-  dc -p nextcloud -f "$CONFIG_DIR/docker-compose.yml" exec -T nextcloud php occ files:cleanup >/dev/null 2>&1 || echo "⚠️  警告: 清理文件缓存失败"
-  dc -p nextcloud -f "$CONFIG_DIR/docker-compose.yml" exec -T nextcloud php occ files:scan --all >/dev/null 2>&1 || echo "⚠️  警告: 扫描文件系统失败"
+  dc -p nextcloud -f "$CONFIG_DIR/docker-compose.yml" exec -T nextcloud-app php occ files:cleanup >/dev/null 2>&1 || echo "⚠️  警告: 清理文件缓存失败"
+  dc -p nextcloud -f "$CONFIG_DIR/docker-compose.yml" exec -T nextcloud-app php occ files:scan --all >/dev/null 2>&1 || echo "⚠️  警告: 扫描文件系统失败"
   
   # 清理 Redis 缓存
   echo "2. 清理 Redis 缓存..."
-  dc -p nextcloud -f "$CONFIG_DIR/docker-compose.yml" exec -T redis redis-cli -a "$REDIS_PASSWORD" FLUSHALL >/dev/null 2>&1 || echo "⚠️  警告: 清理 Redis 缓存失败"
+  dc -p nextcloud -f "$CONFIG_DIR/docker-compose.yml" exec -T nextcloud-redis redis-cli -a "$REDIS_PASSWORD" FLUSHALL >/dev/null 2>&1 || echo "⚠️  警告: 清理 Redis 缓存失败"
   
   # 优化数据库
   echo "3. 优化数据库..."
-  dc -p nextcloud -f "$CONFIG_DIR/docker-compose.yml" exec -T mariadb mariadb -u root -p"$MYSQL_ROOT_PASSWORD" -e "OPTIMIZE TABLE nextcloud.oc_filecache;" >/dev/null 2>&1 || echo "⚠️  警告: 优化数据库失败"
+  dc -p nextcloud -f "$CONFIG_DIR/docker-compose.yml" exec -T nextcloud-db mariadb -u root -p"$MYSQL_ROOT_PASSWORD" -e "OPTIMIZE TABLE nextcloud.oc_filecache;" >/dev/null 2>&1 || echo "⚠️  警告: 优化数据库失败"
   
   # 清理日志文件
   echo "4. 清理日志文件..."
-  dc -p nextcloud -f "$CONFIG_DIR/docker-compose.yml" exec -T nextcloud sh -c "find /var/www/html/data -name '*.log' -type f -exec truncate -s 0 {} \;" >/dev/null 2>&1 || echo "⚠️  警告: 清理日志文件失败"
+  dc -p nextcloud -f "$CONFIG_DIR/docker-compose.yml" exec -T nextcloud-app sh -c "find /var/www/html/data -name '*.log' -type f -exec truncate -s 0 {} \;" >/dev/null 2>&1 || echo "⚠️  警告: 清理日志文件失败"
   
   # 检查系统状态
   echo "5. 检查系统状态..."
-  dc -p nextcloud -f "$CONFIG_DIR/docker-compose.yml" exec -T nextcloud php occ status >/dev/null 2>&1 || echo "⚠️  警告: 检查系统状态失败"
+  dc -p nextcloud -f "$CONFIG_DIR/docker-compose.yml" exec -T nextcloud-app php occ status >/dev/null 2>&1 || echo "⚠️  警告: 检查系统状态失败"
   
   echo "✅ Nextcloud 维护任务执行完成！"
 }
